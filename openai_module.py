@@ -13,14 +13,29 @@ from telebot_nav import TeleBotNav
 from logger import logger
 
 
+# ============================================================
+# OpenAI Adapter
+# ============================================================
+
 class OpenAiAdapter:
+
     def __init__(self) -> None:
+
         self.conversations = {}
+
         self.client = AsyncOpenAI(
             api_key=config.OPENAI_API_KEY
         )
 
-    async def dalle_generate_image(self, prompt: str) -> str:
+    # --------------------------------------------------------
+    # DALL-E
+    # --------------------------------------------------------
+
+    async def dalle_generate_image(
+        self,
+        prompt: str
+    ) -> str:
+
         response = await self.client.images.generate(
             model="dall-e-3",
             prompt=prompt,
@@ -30,13 +45,25 @@ class OpenAiAdapter:
 
         return response.data[0].url
 
-    async def whisper_transcribe(self, audio: BinaryIO) -> str:
+    # --------------------------------------------------------
+    # Whisper
+    # --------------------------------------------------------
+
+    async def whisper_transcribe(
+        self,
+        audio: BinaryIO
+    ) -> str:
+
         response = await self.client.audio.transcriptions.create(
             model="whisper-1",
             file=audio,
         )
 
         return response.text
+
+    # --------------------------------------------------------
+    # TTS
+    # --------------------------------------------------------
 
     async def tts_generate_audio(
         self,
@@ -53,6 +80,10 @@ class OpenAiAdapter:
         return response
 
 
+# ============================================================
+# Whisper Router
+# ============================================================
+
 class WhisperRouter:
 
     @classmethod
@@ -62,16 +93,25 @@ class WhisperRouter:
     ) -> BytesIO:
 
         file = BytesIO(file_content)
+
         file.seek(0)
 
         ogg = AudioSegment.from_ogg(file)
 
         mp3 = BytesIO()
-        ogg.export(mp3, format="mp3")
+
+        ogg.export(
+            mp3,
+            format="mp3"
+        )
 
         mp3.seek(0)
 
         return mp3
+
+    # --------------------------------------------------------
+    # Extract voice text
+    # --------------------------------------------------------
 
     @classmethod
     async def extract_text_from_voice(
@@ -104,6 +144,10 @@ class WhisperRouter:
 
         return text
 
+    # --------------------------------------------------------
+    # Whisper message handler
+    # --------------------------------------------------------
+
     @classmethod
     async def whisper_message_handler(
         cls,
@@ -118,14 +162,17 @@ class WhisperRouter:
 
             text = await botnav.await_coro_sending_action(
                 message.chat.id,
+
                 cls.extract_text_from_voice(
                     botnav,
                     message
                 ),
+
                 "typing"
             )
 
             if text:
+
                 await botnav.bot.send_message(
                     message.chat.id,
                     text
@@ -140,6 +187,10 @@ class WhisperRouter:
 
             logger.exception(exc)
 
+    # --------------------------------------------------------
+    # Start Whisper
+    # --------------------------------------------------------
+
     @classmethod
     async def run(
         cls,
@@ -149,7 +200,10 @@ class WhisperRouter:
 
         botnav.wipe_commands(
             message,
-            preserve=["start", "openai"]
+            preserve=[
+                "start",
+                "openai"
+            ]
         )
 
         await botnav.bot.send_message(
@@ -162,12 +216,24 @@ class WhisperRouter:
             cls.whisper_message_handler
         )
 
-        botnav.clean_next_handler(message)
+        botnav.clean_next_handler(
+            message
+        )
 
-        await botnav.send_commands(message)
+        await botnav.send_commands(
+            message
+        )
 
+
+# ============================================================
+# DALL-E Router
+# ============================================================
 
 class DallERouter:
+
+    # --------------------------------------------------------
+    # DALL-E message handler
+    # --------------------------------------------------------
 
     @classmethod
     async def dalle_message_handler(
@@ -183,9 +249,11 @@ class DallERouter:
 
             url = await botnav.await_coro_sending_action(
                 message.chat.id,
+
                 openai_instance.dalle_generate_image(
                     message.text
                 ),
+
                 "upload_photo"
             )
 
@@ -203,6 +271,10 @@ class DallERouter:
 
             logger.exception(exc)
 
+    # --------------------------------------------------------
+    # Start DALL-E
+    # --------------------------------------------------------
+
     @classmethod
     async def run(
         cls,
@@ -212,7 +284,10 @@ class DallERouter:
 
         botnav.wipe_commands(
             message,
-            preserve=["start", "openai"]
+            preserve=[
+                "start",
+                "openai"
+            ]
         )
 
         await botnav.bot.send_message(
@@ -225,12 +300,24 @@ class DallERouter:
             cls.dalle_message_handler
         )
 
-        botnav.clean_next_handler(message)
+        botnav.clean_next_handler(
+            message
+        )
 
-        await botnav.send_commands(message)
+        await botnav.send_commands(
+            message
+        )
 
+
+# ============================================================
+# TTS Router
+# ============================================================
 
 class TTSRouter:
+
+    # --------------------------------------------------------
+    # TTS message handler
+    # --------------------------------------------------------
 
     @classmethod
     async def tts_message_handler(
@@ -243,9 +330,14 @@ class TTSRouter:
             return
 
         if "openai_params" not in message.state_data:
-            message.state_data["openai_params"] = {}
 
-        voice = message.state_data["openai_params"].get(
+            message.state_data[
+                "openai_params"
+            ] = {}
+
+        voice = message.state_data[
+            "openai_params"
+        ].get(
             "tts_voice",
             "alloy"
         )
@@ -254,16 +346,20 @@ class TTSRouter:
 
             response = await botnav.await_coro_sending_action(
                 message.chat.id,
+
                 openai_instance.tts_generate_audio(
                     message.text,
                     voice
                 ),
+
                 "upload_audio"
             )
 
             await botnav.bot.send_voice(
                 message.chat.id,
-                io.BytesIO(response.content)
+                io.BytesIO(
+                    response.content
+                )
             )
 
         except Exception as exc:
@@ -275,6 +371,10 @@ class TTSRouter:
 
             logger.exception(exc)
 
+    # --------------------------------------------------------
+    # Start TTS
+    # --------------------------------------------------------
+
     @classmethod
     async def run(
         cls,
@@ -284,6 +384,7 @@ class TTSRouter:
 
         await botnav.print_buttons(
             message.chat.id,
+
             {
                 "Alloy": functools.partial(
                     set_openai_param,
@@ -321,13 +422,18 @@ class TTSRouter:
                     "shimmer"
                 ),
             },
+
             "Available voices:",
+
             row_width=3
         )
 
         botnav.wipe_commands(
             message,
-            preserve=["start", "openai"]
+            preserve=[
+                "start",
+                "openai"
+            ]
         )
 
         await botnav.bot.send_message(
@@ -340,10 +446,18 @@ class TTSRouter:
             cls.tts_message_handler
         )
 
-        botnav.clean_next_handler(message)
+        botnav.clean_next_handler(
+            message
+        )
 
-        await botnav.send_commands(message)
+        await botnav.send_commands(
+            message
+        )
 
+
+# ============================================================
+# OpenAI Parameters
+# ============================================================
 
 async def set_openai_param(
     param: str,
@@ -353,9 +467,14 @@ async def set_openai_param(
 ) -> None:
 
     if "openai_params" not in message.state_data:
-        message.state_data["openai_params"] = {}
 
-    message.state_data["openai_params"][param] = value
+        message.state_data[
+            "openai_params"
+        ] = {}
+
+    message.state_data[
+        "openai_params"
+    ][param] = value
 
     await botnav.bot.send_message(
         message.chat.id,
@@ -363,32 +482,155 @@ async def set_openai_param(
     )
 
 
+# ============================================================
+# CHAT GPT
+# ============================================================
+
+async def start_chatgpt(
+    botnav: TeleBotNav,
+    message: Message
+) -> None:
+
+    # استيراد LLMRouter هنا لمنع Circular Import
+    from llm_module import LLMRouter
+
+    # إزالة أي handler سابق
+    botnav.clean_next_handler(
+        message
+    )
+
+    # الاحتفاظ بأوامر start و openai
+    botnav.wipe_commands(
+        message,
+        preserve=[
+            "start",
+            "openai"
+        ]
+    )
+
+    # ========================================================
+    # IMPORTANT
+    #
+    # لا نشغل LLMRouter.run الآن.
+    #
+    # نجعل الرسالة القادمة من المستخدم هي التي تذهب إليه.
+    # ========================================================
+
+    botnav.set_default_handler(
+        message,
+        LLMRouter.run
+    )
+
+    await botnav.bot.send_message(
+        message.chat.id,
+
+        "ChatGPT جاهز.\n\n"
+        "اكتب رسالتك الآن وسأرسلها إلى الذكاء الاصطناعي.\n\n"
+        "للعودة إلى القائمة الرئيسية استخدم /start"
+    )
+
+    await botnav.send_commands(
+        message
+    )
+
+
+# ============================================================
+# DALL-E Button
+# ============================================================
+
+async def start_dalle(
+    botnav: TeleBotNav,
+    message: Message
+) -> None:
+
+    await DallERouter.run(
+        botnav,
+        message
+    )
+
+
+# ============================================================
+# Whisper Button
+# ============================================================
+
+async def start_whisper(
+    botnav: TeleBotNav,
+    message: Message
+) -> None:
+
+    await WhisperRouter.run(
+        botnav,
+        message
+    )
+
+
+# ============================================================
+# TTS Button
+# ============================================================
+
+async def start_tts(
+    botnav: TeleBotNav,
+    message: Message
+) -> None:
+
+    await TTSRouter.run(
+        botnav,
+        message
+    )
+
+
+# ============================================================
+# OPENAI MENU
+# ============================================================
+
 async def start_openai(
     botnav: TeleBotNav,
     message: Message
 ) -> None:
 
-    # مهم:
-    # لا نستورد LLMRouter في بداية الملف.
-    # يتم استيراده هنا بعد اكتمال تحميل جميع الموديولات،
-    # وهذا يمنع Circular Import.
+    # لا نستورد LLMRouter في أعلى الملف
+    # لمنع Circular Import.
     from llm_module import LLMRouter
 
     await botnav.print_buttons(
         message.chat.id,
+
         {
-            "🤖 Chat GPT": LLMRouter.run,
-            "🖌️ Dall-E": DallERouter.run,
-            "🗣️ Whisper": WhisperRouter.run,
-            "💬 TTS": TTSRouter.run
+            # =================================================
+            # IMPORTANT FIX
+            #
+            # لا تستخدم:
+            #
+            # "🤖 Chat GPT": LLMRouter.run
+            #
+            # لأن هذا يشغل ChatGPT فور الضغط على الزر.
+            #
+            # نستخدم start_chatgpt حتى ننتظر رسالة المستخدم.
+            # =================================================
+
+            "🤖 Chat GPT": start_chatgpt,
+
+            "🖌️ Dall-E": start_dalle,
+
+            "🗣️ Whisper": start_whisper,
+
+            "💬 TTS": start_tts
         },
+
         "Choose",
+
         row_width=2
     )
 
+    # ========================================================
+    # Commands
+    # ========================================================
+
     botnav.wipe_commands(
         message,
-        preserve=["start"]
+        preserve=[
+            "start"
+        ]
     )
 
     botnav.add_command(
@@ -398,7 +640,13 @@ async def start_openai(
         start_openai
     )
 
-    await botnav.send_commands(message)
+    await botnav.send_commands(
+        message
+    )
 
+
+# ============================================================
+# OpenAI Instance
+# ============================================================
 
 openai_instance = OpenAiAdapter()
