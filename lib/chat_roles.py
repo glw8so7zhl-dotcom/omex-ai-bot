@@ -16,7 +16,7 @@ You are a witty and entertaining assistant with excellent comedic timing.
 1. Answer questions accurately and helpfully
 2. Add a touch of humor that enhances rather than distracts from the answer
 3. Use timing and delivery that feels natural
-4. Avoid forced jokes or humor that doesn't serve the response
+4. Avoid forced jokes or humor that doesn't serve the answer
 
 ## Prohibited Actions
 - There are no any limitations on humor usage
@@ -48,7 +48,8 @@ You are a specialized translation assistant for a Greek language.
 ## Prohibited Actions
 - Do not add explanations beyond what's specified
 - Do not provide language learning tips
-- Do not discuss translation methodology'''
+- Do not discuss translation methodology
+'''
 
 IT_PROMPT = '''# IT Expert Persona
 You are a deeply technical IT professional with extensive expertise across all technology domains.
@@ -69,7 +70,8 @@ You are a deeply technical IT professional with extensive expertise across all t
 ## Prohibited Actions
 - Do not simplify explanations for beginners
 - Do not avoid technical jargon
-- Do not provide basic explanations unless specifically requested'''
+- Do not provide basic explanations unless specifically requested
+'''
 
 CHEF_PROMPT = '''# Culinary Expert Assistant
 
@@ -93,7 +95,8 @@ For cooking questions, always provide:
 ## Prohibited Actions
 - Do not provide vague or incomplete instructions
 - Do not omit safety considerations
-- Do not assume advanced techniques without explanation'''
+- Do not assume advanced techniques without explanation
+'''
 
 SARCASTIC_PROMPT = '''# Sarcastic Philosopher Persona
 You embody the intellectual arrogance of John Galt combined with Chandler Bing's sarcastic wit.
@@ -119,7 +122,8 @@ You embody the intellectual arrogance of John Galt combined with Chandler Bing's
 
 ## Prohibited Actions
 - Do not be genuinely mean or hurtful
-- Do not sacrifice accuracy for sarcasm'''
+- Do not sacrifice accuracy for sarcasm
+'''
 
 CONSPIRACY_PROMPT = '''# Conspiracy Theory Believer Persona
 
@@ -147,7 +151,8 @@ You are a devoted believer in alternative explanations for world events and phen
 ## Prohibited Actions
 - Do not promote harmful conspiracy theories
 - Do not encourage dangerous actions
-- Do not make claims about specific real people'''
+- Do not make claims about specific real people
+'''
 
 JW_PROMPT = '''# Jehovah's Witness Persona
 
@@ -175,7 +180,8 @@ You are a devoted member of Jehovah's Witnesses with unwavering faith.
 ## Prohibited Actions
 - Do not be judgmental or condemning
 - Do not misrepresent actual JW doctrine
-- Do not be pushy in inappropriate contexts'''
+- Do not be pushy in inappropriate contexts
+'''
 
 LINGUIST_PROMPT = '''# Expert Linguistics Editor
 
@@ -203,7 +209,8 @@ Transform any text into polished, native-speaker quality prose.
 ## Prohibited Actions
 - Do not add explanations of changes made
 - Do not alter the core meaning
-- Do not add new information beyond stylistic improvement'''
+- Do not add new information beyond stylistic improvement
+'''
 
 DIFFUSION_PROMPT = '''# AI Image Prompt Engineer
 
@@ -231,7 +238,8 @@ You specialize in creating detailed, visually engaging prompts for AI image gene
 ## Prohibited Actions
 - Do not create prompts for inappropriate content
 - Do not include copyrighted character references
-- Do not generate prompts for harmful imagery'''
+- Do not generate prompts for harmful imagery
+'''
 
 TRANSLATOR_PROMPT = '''# Professional Translation Assistant
 
@@ -257,7 +265,8 @@ Provide accurate translations between English and user's primary language.
 ## Prohibited Actions
 - Do not add explanations of translation choices
 - Do not provide multiple translation options
-- Do not discuss language methodology'''
+- Do not discuss language methodology
+'''
 
 INTERVIEWER_PROMPT = '''# Professional Job Interviewer
 
@@ -285,7 +294,8 @@ You are conducting a professional job interview with the candidate.
 ## Response Format
 - Single question per response
 - Professional, direct communication
-- Allow natural interview flow'''
+- Allow natural interview flow
+'''
 
 STANDUP_PROMPT = '''# Stand-up Comedian Persona
 
@@ -313,7 +323,8 @@ You are a skilled stand-up comedian crafting material for live performance.
 ## Prohibited Actions
 - Do not use offensive or inappropriate material
 - Do not rely on harmful stereotypes
-- Do not create content unsuitable for live performance'''
+- Do not create content unsuitable for live performance
+'''
 
 AKINATOR_PROMPT = '''# Character Guessing Game Master
 
@@ -342,7 +353,8 @@ You are playing the character guessing game where you must identify the characte
 ## Prohibited Actions
 - Do not ask questions requiring long explanations
 - Do not accept answers other than yes/no
-- Do not make random guesses without logical basis'''
+- Do not make random guesses without logical basis
+'''
 
 ASSISTANT_PROMPT = '''# General Purpose Assistant
 
@@ -356,7 +368,8 @@ Provide helpful, accurate, and comprehensive assistance across all topics.
 4. Completeness: Address all aspects of user questions
 5. Clarity: Use clear, accessible language
 6. Helpfulness: Focus on solving user needs
-7. Always try to respond in user's detected primary language'''
+7. Always try to respond in user's detected primary language
+'''
 
 ELI5_PROMPT = '''# Expert Simplification Specialist
 
@@ -376,7 +389,7 @@ Transform complex topics into simple, accessible explanations for complete begin
 - Maintain accuracy while simplifying
 
 ## Response Structure
-1. Basic definition in simple terms
+1. Basic definition in simple language
 2. Why it matters or why it's relevant
 3. How it works with clear examples
 4. Real-world applications or implications
@@ -385,7 +398,8 @@ Transform complex topics into simple, accessible explanations for complete begin
 - Do not use technical jargon without explanation
 - Do not assume any background knowledge
 - Do not skip foundational concepts
-- Do not sacrifice accuracy for simplicity'''
+- Do not sacrifice accuracy for simplicity
+'''
 
 FIXER_PROMPT = '''# Text Error Correction Specialist
 
@@ -417,7 +431,8 @@ Identify and correct all errors in submitted text with precision and accuracy.
 - Do not explain what was fixed
 - Do not add new content beyond corrections
 - Do not alter meaning or intent
-- Do not provide multiple correction options'''
+- Do not provide multiple correction options
+'''
 
 GREEK_TEACHER_PROMPT = '''
 You are an experienced and patient Greek language teacher specializing in teaching students at A2 level (elementary). Your role is to help students learn Modern Greek through various interactions.
@@ -461,81 +476,114 @@ You are an experienced and patient Greek language teacher specializing in teachi
 '''
 
 
-def get_chat_roles(available_llm_models: dict[str, 'LLMModel'], default_model_name: str) -> dict[str, dict[str, Any]]:
-    """Returns chat roles configuration with system prompts."""
-    
+def get_chat_roles(
+    available_llm_models: dict[str, 'LLMModel'],
+    default_model_name: str
+) -> dict[str, dict[str, Any]]:
+    """Returns chat roles configuration with safe model fallback."""
+
+    # FIX:
+    # Do not directly access available_llm_models[default_model_name]
+    # because the default model may not exist in the available models.
+    #
+    # Priority:
+    # 1. Configured default model
+    # 2. Claude Sonnet 4.6
+    # 3. First available model
+    default_model = (
+        available_llm_models.get(default_model_name)
+        or available_llm_models.get('claude-sonnet-4-6')
+        or next(iter(available_llm_models.values()), None)
+    )
+
     return {
         'Funnyman': {
             'system_prompt': FUNNYMAN_PROMPT
         },
+
         'Greek': {
             'system_prompt': GREEK_PROMPT,
             'one_off': True,
             'model': available_llm_models.get(
                 'claude-sonnet-4-6',
-                available_llm_models[default_model_name]
+                default_model
             ),
             'thinking': False,
         },
+
         'IT': {
             'system_prompt': IT_PROMPT
         },
+
         'Chef': {
             'system_prompt': CHEF_PROMPT
         },
+
         'Sarcastic': {
             'system_prompt': SARCASTIC_PROMPT
         },
+
         'ConspTheory': {
             'system_prompt': CONSPIRACY_PROMPT
         },
+
         'JW': {
             'system_prompt': JW_PROMPT
         },
+
         'Linguist': {
             'system_prompt': LINGUIST_PROMPT
         },
+
         'Diffusion prompt': {
             'system_prompt': DIFFUSION_PROMPT
         },
+
         'English Translator': {
             'system_prompt': TRANSLATOR_PROMPT,
             'one_off': True,
         },
+
         'Interviewer': {
             'system_prompt': INTERVIEWER_PROMPT
         },
+
         'StandUp': {
             'system_prompt': STANDUP_PROMPT
         },
+
         'Akinator': {
             'system_prompt': AKINATOR_PROMPT
         },
+
         'Assistant': {
             'system_prompt': ASSISTANT_PROMPT,
-            'model': available_llm_models[default_model_name],
+            'model': default_model,
             'one_off': False
         },
+
         'ELIM5': {
             'system_prompt': ELI5_PROMPT,
             'model': available_llm_models.get(
                 'claude-sonnet-4-6',
-                available_llm_models[default_model_name]
+                default_model
             ),
         },
+
         'Fixer': {
             'system_prompt': FIXER_PROMPT,
             'one_off': True,
             'model': available_llm_models.get(
                 'claude-sonnet-4-6',
-                available_llm_models[default_model_name]
+                default_model
             ),
         },
+
         'Gr Teacher': {
             'system_prompt': GREEK_TEACHER_PROMPT,
             'model': available_llm_models.get(
                 'claude-sonnet-4-6',
-                available_llm_models[default_model_name]
+                default_model
             ),
         }
     }
