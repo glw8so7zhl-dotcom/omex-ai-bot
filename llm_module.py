@@ -1,120 +1,229 @@
-import os
+import logging
+from typing import Dict, List
+
+from openai import AsyncOpenAI
+
+import config
 
 
-# ============================================================
-# Telegram
-# ============================================================
-
-ALLOWED_USER_IDS = {
-    os.getenv("ADMIN_USER_ID", ""): "Osama"
-}
-
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+logger = logging.getLogger(__name__)
 
 
-# ============================================================
-# AI API Keys
-# ============================================================
+class LLMRouter:
+    """
+    LLM router for the Telegram bot.
 
-# OpenAI - optional
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+    Priority:
+    1. OpenRouter
+    2. OpenAI
+    3. Anthropic is reserved for future integration
+    """
 
-# Anthropic - optional
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+    conversations: Dict[int, List[dict]] = {}
 
-# Replicate - optional
-REPLICATE_API_KEY = os.getenv("REPLICATE_API_KEY")
+    @classmethod
+    def _get_client(cls):
+        """
+        Create the appropriate async AI client.
+        """
 
-# OpenRouter - used for the free AI model
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+        # Prefer OpenRouter because the configured default model
+        # is an OpenRouter model.
+        if config.OPENROUTER_API_KEY:
+            return AsyncOpenAI(
+                api_key=config.OPENROUTER_API_KEY,
+                base_url="https://openrouter.ai/api/v1",
+            )
 
+        # Fallback to OpenAI.
+        if config.OPENAI_API_KEY:
+            return AsyncOpenAI(
+                api_key=config.OPENAI_API_KEY
+            )
 
-# ============================================================
-# Ollama
-# ============================================================
+        return None
 
-OLLAMA_HOST = os.getenv("OLLAMA_HOST")
+    @classmethod
+    def _get_model(cls) -> str:
+        """
+        Return the configured default model.
+        """
 
+        return getattr(
+            config,
+            "DEFAULT_LLM_MODEL",
+            "deepseek/deepseek-r1-0528:free",
+        )
 
-# ============================================================
-# Default LLM Model
-# ============================================================
+    @classmethod
+    def _get_system_prompt(cls) -> str:
+        return (
+            "You are OMEX AI Assistant. "
+            "Answer clearly and accurately. "
+            "The user may communicate in Arabic or English. "
+            "If the user writes Arabic, respond in Arabic. "
+            "Do not invent information."
+        )
 
-# The project already defines this model as an OpenRouter model:
-#
-# deepseek/deepseek-r1-0528:free
-#
-# Therefore we use it as the default instead of gpt-5-mini,
-# which requires OpenAI API quota.
-#
-# This can still be overridden through Railway Variables
-# using DEFAULT_LLM_MODEL.
+    @classmethod
+    async def ask(
+        cls,
+        user_id: int,
+        text: str,
+    ) -> str:
+        """
+        Send a message to the configured LLM.
+        """
 
-DEFAULT_LLM_MODEL = os.getenv(
-    "DEFAULT_LLM_MODEL",
-    "deepseek/deepseek-r1-0528:free"
-)
+        client = cls._get_client()
 
+        if client is None:
+            return (
+                "لم يتم إعداد مفتاح API للذكاء الاصطناعي.\n\n"
+                "أضف OPENROUTER_API_KEY أو OPENAI_API_KEY "
+                "في Railway Variables."
+            )
 
-# ============================================================
-# YouTube Downloader
-# ============================================================
+        if not text or not text.strip():
+            return "أرسل رسالة نصية أولًا."
 
-YT_DL_DIR = os.getenv("YT_DL_DIR")
-YT_DL_URL = os.getenv("YT_DL_URL")
+        text = text.strip()
 
+        # Create conversation history for this Telegram user.
+        if user_id not in cls.conversations:
+            cls.conversations[user_id] = [
+                {
+                    "role": "system",
+                    "content": cls._get_system_prompt(),
+                }
+            ]
 
-# ============================================================
-# Schedules
-# ============================================================
+        history = cls.conversations[user_id]
 
-SCHEDULES = None
+        history.append(
+            {
+                "role": "user",
+                "content": text,
+            }
+        )
 
+        # Prevent unlimited memory growth.
+        # Keep system message + latest 20 messages.
+        if len(history) > 21:
+            cls.conversations[user_id] = [
+                history[0]
+            ] + history[-20:]
 
-# ============================================================
-# User Permissions
-# ============================================================
+        history = cls.conversations[user_id]
 
-USER_PERMISSIONS = {
-    os.getenv("ADMIN_USER_ID", ""): {
-        "is_admin": True,
-        "can_use_tools": True,
-        "can_use_ollama_llm_models": False,
-        "can_use_replicate_models": True,
-        "can_use_memory_tool": True,
-        "exclude_replicate_models": []
-    },
+        try:
+            response = await client.chat.completions.create(
+                model=cls._get_model(),
+                messages=history,
+                temperature=0.7,
+            )
 
-    "default": {
-        "is_admin": False,
-        "can_use_tools": True,
-        "can_use_ollama_llm_models": False,
-        "can_use_replicate_models": False,
-        "can_use_memory_tool": False,
-        "exclude_replicate_models": []
-    }
-}
+            answer = response.choices[0].message.content
 
+            if not answer:
+                answer = "لم يتم استلام رد من نموذج الذكاء الاصطناعي."
 
-# ============================================================
-# MCP
-# ============================================================
+            answer = answer.strip()
 
-MCP_FETCH_URL = os.getenv("MCP_FETCH_URL")
+            history.append(
+                {
+                    "role": "assistant",
+                    "content": answer,
+                }
+            )
 
+            return answer
 
-# ============================================================
-# WebApp
-# ============================================================
+        except Exception as exc:
+            logger.exception(
+                "LLM request failed: %s",
+                exc,
+            )
 
-WEBAPP_PORT = int(os.getenv("PORT", "8180"))
+            # Remove the failed user message so the conversation
+            # does not become corrupted.
+            if (
+                history
+                and history[-1].get("role") == "user"
+                and history[-1].get("content") == text
+            ):
+                history.pop()
 
-GREEK_LEARNING_WEBAPP_URL = os.getenv(
-    "GREEK_LEARNING_WEBAPP_URL",
-    f"http://localhost:{WEBAPP_PORT}/greek/"
-)
+            raise
 
-WEBAPP_BASE_URL = os.getenv(
-    "WEBAPP_BASE_URL",
-    f"http://localhost:{WEBAPP_PORT}"
-)
+        finally:
+            try:
+                await client.close()
+            except Exception:
+                pass
+
+    @classmethod
+    async def run(cls, botnav, message):
+        """
+        Telegram handler.
+        """
+
+        if message.content_type != "text":
+            return
+
+        user_id = message.from_user.id
+        text = message.text or ""
+
+        # Commands
+        if text == "/clear":
+            cls.conversations.pop(user_id, None)
+
+            await botnav.bot.send_message(
+                message.chat.id,
+                "تم مسح المحادثة والذاكرة الحالية."
+            )
+            return
+
+        try:
+            # Show typing status while waiting for the model.
+            try:
+                answer = await botnav.await_coro_sending_action(
+                    message.chat.id,
+                    cls.ask(user_id, text),
+                    "typing",
+                )
+            except AttributeError:
+                # Fallback if this TeleBotNav version does not
+                # provide await_coro_sending_action.
+                answer = await cls.ask(user_id, text)
+
+            # Telegram has a message length limit.
+            max_length = 4096
+
+            if len(answer) <= max_length:
+                await botnav.bot.send_message(
+                    message.chat.id,
+                    answer,
+                )
+                return
+
+            # Split long responses.
+            for i in range(0, len(answer), max_length):
+                chunk = answer[i:i + max_length]
+
+                await botnav.bot.send_message(
+                    message.chat.id,
+                    chunk,
+                )
+
+        except Exception as exc:
+            logger.exception(
+                "LLM Telegram handler failed: %s",
+                exc,
+            )
+
+            await botnav.bot.send_message(
+                message.chat.id,
+                "حدث خطأ أثناء الاتصال بنموذج الذكاء الاصطناعي.\n"
+                "راجع Railway Logs لمعرفة الخطأ الحقيقي."
+            )
