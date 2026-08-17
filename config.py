@@ -1,41 +1,57 @@
 import os
-import sys
-import json
 
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
+ALLOWED_USER_IDS = {
+    os.getenv("ADMIN_USER_ID", ""): "Osama"
+}
 
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-if not os.path.exists(CONFIG_PATH):
-    print(f'{CONFIG_PATH} not found')
-    sys.exit(1)
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+REPLICATE_API_KEY = os.getenv("REPLICATE_API_KEY")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
+OLLAMA_HOST = os.getenv("OLLAMA_HOST")
 
-configdata = json.load(open(CONFIG_PATH, 'r'))
+DEFAULT_LLM_MODEL = os.getenv(
+    "DEFAULT_LLM_MODEL",
+    "gpt-5-mini"
+)
 
-ALLOWED_USER_IDS = configdata['ALLOWED_USER_IDS']
-OPENAI_API_KEY = configdata.get('OPENAI_API_KEY', None)
-OLLAMA_HOST = configdata.get('OLLAMA_HOST', None)
+YT_DL_DIR = os.getenv("YT_DL_DIR")
+YT_DL_URL = os.getenv("YT_DL_URL")
 
-TELEGRAM_TOKEN = configdata['TELEGRAM_TOKEN']
+SCHEDULES = None
 
-REPLICATE_API_KEY = configdata.get('REPLICATE_API_KEY', None)
+USER_PERMISSIONS = {
+    os.getenv("ADMIN_USER_ID", ""): {
+        "is_admin": True,
+        "can_use_tools": True,
+        "can_use_ollama_llm_models": False,
+        "can_use_replicate_models": True,
+        "can_use_memory_tool": True,
+        "exclude_replicate_models": []
+    },
+    "default": {
+        "is_admin": False,
+        "can_use_tools": True,
+        "can_use_ollama_llm_models": False,
+        "can_use_replicate_models": False,
+        "can_use_memory_tool": False,
+        "exclude_replicate_models": []
+    }
+}
 
-ANTHROPIC_API_KEY = configdata.get('ANTHROPIC_API_KEY', None)
+MCP_FETCH_URL = os.getenv("MCP_FETCH_URL")
 
-DEFAULT_LLM_MODEL = configdata.get('DEFAULT_LLM_MODEL', 'claude-haiku-4-5')
+WEBAPP_PORT = int(os.getenv("PORT", "8180"))
 
-OPENROUTER_API_KEY = configdata.get('OPENROUTER_API_KEY', None)
+GREEK_LEARNING_WEBAPP_URL = os.getenv(
+    "GREEK_LEARNING_WEBAPP_URL",
+    f"http://localhost:{WEBAPP_PORT}/greek/"
+)
 
-YT_DL_DIR = configdata.get('YT_DL_DIR', None)
-YT_DL_URL = configdata.get('YT_DL_URL', None)
-SCHEDULES = configdata.get('SCHEDULES', None)
-
-USER_PERMISSIONS = configdata.get('USER_PERMISSIONS', {})
-
-MCP_FETCH_URL = configdata.get('MCP_FETCH_URL', None)
-
-# Web App server configuration
-WEBAPP_PORT = configdata.get('WEBAPP_PORT', 8180)
-GREEK_LEARNING_WEBAPP_URL = configdata.get('GREEK_LEARNING_WEBAPP_URL', f'http://localhost:{WEBAPP_PORT}/greek/')
-# Base URL for user-generated apps (defaults to the same host as the greek app)
-WEBAPP_BASE_URL = configdata.get('WEBAPP_BASE_URL', f'http://localhost:{WEBAPP_PORT}')
+WEBAPP_BASE_URL = os.getenv(
+    "WEBAPP_BASE_URL",
+    f"http://localhost:{WEBAPP_PORT}"
+)
