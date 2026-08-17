@@ -12,14 +12,15 @@ logger = logging.getLogger(__name__)
 
 class LLMRouter:
     """
-    OMEX AI Assistant LLM Router.
+    OMEX AI Assistant
 
-    Supports:
-    - Normal text conversations
-    - Product image analysis
-    - Arabic marketing descriptions
-    - OpenRouter
-    - OpenAI fallback for text
+    يدعم:
+    1. المحادثة النصية.
+    2. استقبال صور المنتجات.
+    3. تحليل صور المنتجات.
+    4. كتابة وصف تسويقي احترافي بالعربية.
+    5. OpenRouter.
+    6. OpenAI كخيار احتياطي للمحادثة النصية.
     """
 
     conversations: Dict[int, List[dict]] = {}
@@ -31,13 +32,10 @@ class LLMRouter:
     @classmethod
     def _get_client(cls, vision: bool = False):
         """
-        Create the appropriate async AI client.
+        إنشاء اتصال مع مزود الذكاء الاصطناعي.
 
-        OpenRouter is preferred.
-
-        Vision requests use OpenRouter because the configured
-        free router can automatically select a model that supports
-        image understanding.
+        تحليل الصور يستخدم OpenRouter.
+        المحادثة النصية تستخدم OpenRouter أولًا ثم OpenAI.
         """
 
         # -----------------------------------------------------
@@ -52,7 +50,7 @@ class LLMRouter:
             )
 
         # -----------------------------------------------------
-        # OpenAI fallback
+        # OpenAI
         # -----------------------------------------------------
 
         if config.OPENAI_API_KEY and not vision:
@@ -70,7 +68,7 @@ class LLMRouter:
     @classmethod
     def _get_model(cls) -> str:
         """
-        Normal text model.
+        النموذج المستخدم للمحادثة النصية.
         """
 
         return getattr(
@@ -86,15 +84,14 @@ class LLMRouter:
     @classmethod
     def _get_vision_model(cls) -> str:
         """
-        Vision model.
+        النموذج المستخدم لتحليل صور المنتجات.
 
-        VISION_MODEL can be configured in Railway Variables.
+        يمكن تغييره من Railway Variables بإضافة:
 
-        Default:
-            openrouter/free
+        VISION_MODEL
 
-        OpenRouter's free router automatically chooses a free
-        model capable of handling image input.
+        إذا لم يتم وضع المتغير، يستخدم:
+        openrouter/free
         """
 
         return getattr(
@@ -110,134 +107,257 @@ class LLMRouter:
     @classmethod
     def _get_system_prompt(cls) -> str:
 
-        return (
-            "You are OMEX AI Assistant. "
-            "Answer clearly and accurately. "
-            "The user may communicate in Arabic or English. "
-            "If the user writes Arabic, respond in Arabic. "
-            "Do not invent information."
-        )
+        return """
+أنت OMEX AI Assistant.
+
+أجب بشكل واضح ودقيق.
+
+إذا كان المستخدم يكتب بالعربية، أجب بالعربية.
+
+إذا كان المستخدم يكتب بالإنجليزية، أجب بالإنجليزية.
+
+لا تخترع معلومات غير مؤكدة.
+
+لا تدّعي معرفة معلومات غير متوفرة.
+"""
 
     # =========================================================
-    # PRODUCT IMAGE SYSTEM PROMPT
+    # PRODUCT SYSTEM PROMPT
     # =========================================================
 
     @classmethod
     def _get_product_system_prompt(cls) -> str:
 
         return """
-أنت OMEX AI Assistant، خبير محترف في:
+أنت كاتب محتوى تجاري محترف ومتخصص في وصف المنتجات لمتجر OMEX Store في السوق اليمني.
 
-- E-commerce Copywriting
-- Product Marketing
-- Consumer Psychology
-- Facebook Marketing
-- Instagram Marketing
-- TikTok Marketing
-- SEO Copywriting
-- Amazon Listing Optimization
+مهمتك:
 
-مهمتك الأساسية عند استلام صورة منتج هي تحليل الصورة بدقة ثم كتابة وصف
-تسويقي احترافي مناسب للسوق اليمني.
+عند استلام صورة منتج، حلل المنتج الظاهر في الصورة بدقة، ثم اكتب وصفًا تجاريًا عربيًا احترافيًا ومنظمًا وجاهزًا للنشر.
 
-قواعد مهمة جدًا:
+==================================================
+قواعد التحليل والدقة
+==================================================
 
-1. حلل المنتج الظاهر في الصورة فقط.
-2. لا تخترع اسم شركة أو علامة تجارية غير واضحة.
-3. لا تخترع السعر.
-4. لا تخترع المقاسات.
-5. لا تخترع المواد.
-6. لا تخترع المواصفات التقنية.
-7. لا تدّعي وجود ميزة لا يمكن تأكيدها من الصورة أو من كلام المستخدم.
-8. إذا كانت معلومة غير مؤكدة، لا تقدمها كحقيقة.
-9. إذا كان اسم المنتج واضحًا في الصورة، استخدمه.
-10. إذا لم يكن الاسم واضحًا، استخدم اسمًا وصفيًا مناسبًا.
-11. إذا أرسل المستخدم نصًا مع الصورة، اعتبر النص معلومات إضافية من المستخدم.
-12. اكتب بالعربية إذا كان المستخدم يكتب بالعربية.
-13. اجعل النص مناسبًا للإعلانات ومنشورات Facebook وInstagram وWhatsApp.
-14. تجنب المبالغة الكاذبة.
-15. لا تستخدم عبارات طبية أو علاجية إلا إذا كانت معلومة مؤكدة من المستخدم.
-16. لا تقل "الأفضل في السوق" أو "مضمون 100%" إلا إذا طلب المستخدم ذلك وكان هناك أساس واضح.
-17. ركز على الفائدة العملية للعميل.
-18. اجعل النص واضحًا وسهل القراءة.
-19. استخدم عناوين وفقرات ونقاط.
-20. لا تذكر أنك نموذج ذكاء اصطناعي داخل وصف المنتج.
+1. اعتمد فقط على المعلومات الظاهرة بوضوح في الصورة أو المعلومات التي يكتبها المستخدم.
 
-هوية المتجر:
+2. ممنوع اختراع أي مواصفة غير مؤكدة، مثل:
+
+- قوة الجهاز
+- سرعة الجهاز
+- سعة البطارية
+- مدة التشغيل
+- مدة الشحن
+- نوع المادة
+- المقاسات
+- الوزن
+- عدد الملحقات
+- قوة الشفط
+- قوة النفخ
+- مقاومة الماء
+- الضمان
+- السعر
+
+3. إذا كانت المواصفة غير واضحة، لا تذكرها.
+
+4. لا تستخدم عبارات مبالغًا فيها مثل:
+
+"الأقوى"
+"الأفضل"
+"الأكثر قوة"
+"غير مسبوق"
+"مضمون 100%"
+"أفضل منتج في السوق"
+
+إلا إذا كانت المعلومة مؤكدة ومذكورة من المستخدم.
+
+5. لا تستنتج خصائص تقنية من شكل المنتج فقط.
+
+6. إذا ظهر اسم المنتج على العبوة، استخدم الاسم كما هو.
+
+7. إذا كان الاسم غير واضح، استخدم اسمًا وصفيًا بسيطًا ولا تخترع اسمًا تجاريًا.
+
+8. إذا كانت هناك علامة تجارية واضحة في الصورة، لا تغيّر اسمها.
+
+==================================================
+قواعد اللغة
+==================================================
+
+1. اكتب باللغة العربية السليمة.
+
+2. لا تخلط العربية بالإنجليزية داخل الجمل.
+
+3. الاستثناء الوحيد:
+
+اسم العلامة التجارية أو اسم الموديل الأصلي.
+
+4. ممنوع إدخال كلمات إنجليزية عشوائية داخل الجمل العربية مثل:
+
+cleaning
+charge
+portable
+powerful
+smart
+premium
+
+5. استخدم المصطلح العربي المناسب بدلًا منها.
+
+6. لا تستخدم أخطاء لغوية أو كلمات عشوائية.
+
+7. لا تستخدم لغات مختلطة.
+
+8. اجعل النص طبيعيًا وكأنه مكتوب بواسطة كاتب إعلانات عربي محترف.
+
+9. لا تستخدم رموزًا زخرفية أو إيموجي.
+
+10. لا تضع هاشتاقات داخل الوصف.
+
+==================================================
+أسلوب الكتابة
+==================================================
+
+الأسلوب المطلوب:
+
+احترافي
+واضح
+مقنع
+منظم
+واقعي
+مختصر
+مناسب للسوق اليمني
+جاهز للنشر على فيسبوك وإنستغرام وواتساب.
+
+لا تكرر نفس المعلومة أكثر من مرة.
+
+لا تستخدم كلامًا مبالغًا فيه.
+
+ركز على:
+
+- ما هو المنتج؟
+- ما وظيفته؟
+- أين يستخدم؟
+- كيف يفيد المستخدم؟
+- ما الذي يظهر في الصورة؟
+- ما الملحقات الظاهرة؟
+- ما المميزات التي يمكن تأكيدها؟
+
+==================================================
+تنسيق النتيجة
+==================================================
+
+اكتب النتيجة بهذا الترتيب بالضبط:
+
+اسم المنتج
+
+[اسم واضح ومختصر]
+
+الوصف
+
+[فقرة احترافية من 3 إلى 5 أسطر تشرح المنتج ووظيفته واستخداماته.]
+
+أبرز المميزات
+
+• [ميزة مؤكدة]
+• [ميزة مؤكدة]
+• [ميزة مؤكدة]
+• [ميزة مؤكدة]
+
+الاستخدامات
+
+• [استخدام مناسب]
+• [استخدام مناسب]
+• [استخدام مناسب]
+
+مناسب لـ
+
+[الفئة المناسبة للمنتج في جملة قصيرة.]
+
+طريقة الاستخدام
+
+[اذكر خطوات الاستخدام فقط إذا كانت واضحة من المنتج أو المعلومات التي قدمها المستخدم.]
+
+الخلاصة
+
+[جملة تسويقية قصيرة وواقعية توضح فائدة المنتج.]
+
+نص إعلاني جاهز للنشر
+
+[إعلان قصير من 3 إلى 5 أسطر، واضح ومقنع وطبيعي.]
+
+==================================================
+قواعد النص الإعلاني
+==================================================
+
+اجعل الإعلان طبيعيًا وليس مثل تقرير تقني.
+
+ركز على فائدة المنتج للمستخدم.
+
+لا تكرر قائمة المميزات بالكامل.
+
+لا تخترع سعرًا.
+
+لا تخترع عرضًا.
+
+لا تخترع ضمانًا.
+
+لا تخترع معلومات التوصيل.
+
+لا تستخدم مبالغة غير مؤكدة.
+
+==================================================
+معلومات المتجر
+==================================================
 
 اسم المتجر:
-متجر أومكس - OMEX Store
+
+متجر أومكس
+
+بالإنجليزية:
+
+OMEX Store
 
 السوق:
+
 اليمن
 
-أسلوب الكتابة:
-احترافي، مقنع، واضح، مباشر، حديث، مناسب للمستهلك اليمني.
+إذا لم يعطِ المستخدم السعر:
 
-عند تحليل صورة المنتج، أخرج النتيجة بهذا الهيكل:
+لا تذكر السعر.
 
-━━━━━━━━━━━━━━━━━━
+إذا لم يعطِ المستخدم معلومات التوصيل:
 
-اسم المنتج:
-[اسم المنتج]
+لا تذكر معلومات التوصيل.
 
-━━━━━━━━━━━━━━━━━━
+إذا لم يعطِ المستخدم الضمان:
 
-عنوان تسويقي قوي:
-[Hook قصير وجذاب]
+لا تذكر الضمان.
 
-━━━━━━━━━━━━━━━━━━
+إذا لم يعطِ المستخدم مواصفات تقنية:
 
-وصف المنتج:
-[وصف احترافي يشرح المنتج وفائدته واستخدامه اعتمادًا على المعلومات
-المؤكدة فقط]
+لا تخترع المواصفات.
 
-━━━━━━━━━━━━━━━━━━
+==================================================
+النتيجة النهائية
+==================================================
 
-أهم المميزات:
-• ميزة مؤكدة من الصورة
-• ميزة مؤكدة من الصورة
-• ميزة مؤكدة من الصورة
+يجب أن تكون النتيجة:
 
-━━━━━━━━━━━━━━━━━━
-
-لماذا قد يناسبك؟
-[الفائدة العملية للعميل]
-
-━━━━━━━━━━━━━━━━━━
-
-طريقة الاستخدام:
-[اذكرها فقط إذا كانت واضحة أو مؤكدة]
-
-━━━━━━━━━━━━━━━━━━
-
-الفئة المناسبة:
-[الفئة المحتملة بناءً على طبيعة المنتج]
-
-━━━━━━━━━━━━━━━━━━
-
-نص إعلاني قصير:
-[نسخة مختصرة مناسبة لفيسبوك وواتساب]
-
-━━━━━━━━━━━━━━━━━━
-
-دعوة لاتخاذ إجراء:
-[CTA مناسب للبيع]
-
-━━━━━━━━━━━━━━━━━━
-
-كلمات بحث SEO:
-[كلمات مرتبطة بالمنتج بالعربية]
-
-━━━━━━━━━━━━━━━━━━
-
-ملاحظة:
-إذا كانت هناك معلومات لا يمكن تحديدها من الصورة، لا تخمنها.
-استخدم فقط المعلومات المؤكدة.
+عربية سليمة
+منظمة
+واضحة
+احترافية
+دقيقة
+مقنعة
+واقعية
+بدون كلمات عشوائية
+بدون خلط لغات
+بدون مبالغة
+بدون معلومات غير مؤكدة
+جاهزة للنسخ والنشر مباشرة.
 """
 
     # =========================================================
-    # TEXT CHAT
+    # NORMAL TEXT CHAT
     # =========================================================
 
     @classmethod
@@ -264,7 +384,7 @@ class LLMRouter:
         text = text.strip()
 
         # -----------------------------------------------------
-        # Create conversation
+        # إنشاء المحادثة
         # -----------------------------------------------------
 
         if user_id not in cls.conversations:
@@ -286,14 +406,15 @@ class LLMRouter:
         )
 
         # -----------------------------------------------------
-        # Limit conversation
+        # منع زيادة حجم الذاكرة
         # -----------------------------------------------------
 
         if len(history) > 21:
 
-            cls.conversations[user_id] = [
-                history[0]
-            ] + history[-20:]
+            cls.conversations[user_id] = (
+                [history[0]]
+                + history[-20:]
+            )
 
         history = cls.conversations[user_id]
 
@@ -331,7 +452,7 @@ class LLMRouter:
                 exc,
             )
 
-            # Remove failed user message
+            # حذف الرسالة الفاشلة من المحادثة
             if (
                 history
                 and history[-1].get("role") == "user"
@@ -350,7 +471,7 @@ class LLMRouter:
                 pass
 
     # =========================================================
-    # IMAGE -> BASE64
+    # DOWNLOAD TELEGRAM PHOTO
     # =========================================================
 
     @classmethod
@@ -360,14 +481,14 @@ class LLMRouter:
         message
     ) -> Optional[bytes]:
         """
-        Download the highest-resolution Telegram photo.
+        تحميل أعلى دقة متوفرة من صورة Telegram.
         """
 
         if not message.photo:
+
             return None
 
-        # Telegram sends multiple resolutions.
-        # [-1] = highest available resolution.
+        # آخر عنصر عادةً هو أعلى دقة
         photo = message.photo[-1]
 
         file_info = await botnav.bot.get_file(
@@ -381,7 +502,7 @@ class LLMRouter:
         return bytes(file_content)
 
     # =========================================================
-    # IMAGE ANALYSIS
+    # ANALYZE PRODUCT IMAGE
     # =========================================================
 
     @classmethod
@@ -392,7 +513,7 @@ class LLMRouter:
         user_caption: str = "",
     ) -> str:
         """
-        Analyze a product image using a vision-capable model.
+        تحليل صورة المنتج وكتابة وصف احترافي.
         """
 
         if not image_bytes:
@@ -400,14 +521,16 @@ class LLMRouter:
             return "لم أتمكن من قراءة صورة المنتج."
 
         # -----------------------------------------------------
-        # Vision requires OpenRouter in this implementation.
+        # تحليل الصور يحتاج OpenRouter
         # -----------------------------------------------------
 
         if not config.OPENROUTER_API_KEY:
 
             return (
-                "تحليل صور المنتجات يحتاج إلى OPENROUTER_API_KEY.\n\n"
-                "أضف المفتاح في Railway Variables ثم أعد تشغيل الخدمة."
+                "تحليل صور المنتجات يحتاج إلى "
+                "OPENROUTER_API_KEY.\n\n"
+                "أضف المفتاح في Railway Variables "
+                "ثم أعد تشغيل الخدمة."
             )
 
         client = cls._get_client(
@@ -421,7 +544,7 @@ class LLMRouter:
             )
 
         # -----------------------------------------------------
-        # Convert image to Base64
+        # تحويل الصورة إلى Base64
         # -----------------------------------------------------
 
         image_base64 = base64.b64encode(
@@ -434,24 +557,34 @@ class LLMRouter:
         )
 
         # -----------------------------------------------------
-        # User instruction
+        # تعليمات المستخدم
         # -----------------------------------------------------
 
         if user_caption and user_caption.strip():
 
             instruction = (
-                "حلل صورة المنتج التالية واكتب وصفًا تسويقيًا احترافيًا "
+                "حلل صورة المنتج التالية واكتب وصفًا "
+                "تسويقيًا احترافيًا باللغة العربية "
                 "للسوق اليمني.\n\n"
-                "معلومات إضافية كتبها المستخدم:\n"
+                "معلومات إضافية قدمها المستخدم:\n"
                 + user_caption.strip()
+                + "\n\n"
+                "اعتبر هذه المعلومات صحيحة من المستخدم، "
+                "لكن لا تضف مواصفات أخرى غير مؤكدة من الصورة."
             )
 
         else:
 
             instruction = (
-                "حلل صورة المنتج التالية واكتب وصفًا تسويقيًا "
-                "احترافيًا للسوق اليمني وفق التعليمات."
+                "حلل صورة المنتج التالية واكتب وصفًا "
+                "تسويقيًا احترافيًا باللغة العربية "
+                "للسوق اليمني وفق التعليمات الموجودة في "
+                "تعليمات النظام."
             )
+
+        # -----------------------------------------------------
+        # الرسالة التي تحتوي الصورة
+        # -----------------------------------------------------
 
         messages = [
             {
@@ -468,7 +601,7 @@ class LLMRouter:
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": image_url
+                            "url": image_url,
                         },
                     },
                 ],
@@ -488,14 +621,16 @@ class LLMRouter:
             if not answer:
 
                 return (
-                    "تم تحليل الصورة، ولكن لم يصل نص من نموذج الذكاء الاصطناعي."
+                    "تم تحليل الصورة، ولكن لم يصل "
+                    "نص من نموذج الذكاء الاصطناعي."
                 )
 
             answer = answer.strip()
 
             # -------------------------------------------------
-            # Store only textual result in conversation.
-            # We don't store the huge Base64 image.
+            # حفظ النتيجة في الذاكرة النصية
+            #
+            # لا نحفظ Base64 حتى لا تكبر الذاكرة.
             # -------------------------------------------------
 
             if user_id not in cls.conversations:
@@ -507,18 +642,21 @@ class LLMRouter:
                     }
                 ]
 
+            image_memory_text = (
+                "[تم إرسال صورة منتج للتحليل]"
+            )
+
+            if user_caption:
+
+                image_memory_text += (
+                    "\nملاحظة المستخدم: "
+                    + user_caption.strip()
+                )
+
             cls.conversations[user_id].append(
                 {
                     "role": "user",
-                    "content": (
-                        "[تم إرسال صورة منتج للتحليل]"
-                        + (
-                            "\nملاحظة المستخدم: "
-                            + user_caption.strip()
-                            if user_caption
-                            else ""
-                        )
-                    ),
+                    "content": image_memory_text,
                 }
             )
 
@@ -529,14 +667,18 @@ class LLMRouter:
                 }
             )
 
-            # Keep conversation under control
+            # -------------------------------------------------
+            # تحديد حجم الذاكرة
+            # -------------------------------------------------
+
             history = cls.conversations[user_id]
 
             if len(history) > 21:
 
-                cls.conversations[user_id] = [
-                    history[0]
-                ] + history[-20:]
+                cls.conversations[user_id] = (
+                    [history[0]]
+                    + history[-20:]
+                )
 
             return answer
 
@@ -557,7 +699,45 @@ class LLMRouter:
                 pass
 
     # =========================================================
-    # TELEGRAM HANDLER
+    # SEND LONG TELEGRAM MESSAGE
+    # =========================================================
+
+    @classmethod
+    async def _send_long_message(
+        cls,
+        botnav,
+        chat_id: int,
+        text: str,
+    ) -> None:
+
+        max_length = 4096
+
+        if len(text) <= max_length:
+
+            await botnav.bot.send_message(
+                chat_id,
+                text,
+            )
+
+            return
+
+        for i in range(
+            0,
+            len(text),
+            max_length
+        ):
+
+            chunk = text[
+                i:i + max_length
+            ]
+
+            await botnav.bot.send_message(
+                chat_id,
+                chunk,
+            )
+
+    # =========================================================
+    # TELEGRAM ROUTER
     # =========================================================
 
     @classmethod
@@ -567,22 +747,30 @@ class LLMRouter:
         message
     ):
         """
-        Main Telegram handler.
+        معالج Telegram الرئيسي.
 
-        Supports:
-        - text
-        - product photos
+        يقبل:
+
+        TEXT
+        PHOTO
+
+        النص:
+            محادثة عادية.
+
+        الصورة:
+            تحليل المنتج وكتابة وصف احترافي.
         """
 
         user_id = message.from_user.id
 
         # =====================================================
-        # CLEAR COMMAND
+        # CLEAR
         # =====================================================
 
         if (
             message.content_type == "text"
-            and message.text == "/clear"
+            and message.text
+            and message.text.strip() == "/clear"
         ):
 
             cls.conversations.pop(
@@ -598,17 +786,25 @@ class LLMRouter:
             return
 
         # =====================================================
-        # PRODUCT IMAGE
+        # PHOTO
         # =====================================================
 
         if message.content_type == "photo":
 
             try:
 
+                # -------------------------------------------------
+                # رسالة انتظار
+                # -------------------------------------------------
+
                 await botnav.bot.send_message(
                     message.chat.id,
                     "جاري تحليل صورة المنتج وكتابة الوصف الاحترافي..."
                 )
+
+                # -------------------------------------------------
+                # تحميل الصورة
+                # -------------------------------------------------
 
                 image_bytes = (
                     await cls._download_telegram_photo(
@@ -626,80 +822,68 @@ class LLMRouter:
 
                     return
 
+                # -------------------------------------------------
+                # Caption
+                # -------------------------------------------------
+
                 caption = (
-                    message.caption
+                    message.caption.strip()
                     if message.caption
                     else ""
                 )
 
+                # -------------------------------------------------
+                # تحليل الصورة
+                # -------------------------------------------------
+
                 try:
 
-                    answer = await botnav.await_coro_sending_action(
-                        message.chat.id,
+                    answer = (
+                        await botnav.await_coro_sending_action(
+                            message.chat.id,
 
-                        cls.analyze_product_image(
-                            user_id,
-                            image_bytes,
-                            caption,
-                        ),
+                            cls.analyze_product_image(
+                                user_id=user_id,
+                                image_bytes=image_bytes,
+                                user_caption=caption,
+                            ),
 
-                        "typing",
+                            "typing",
+                        )
                     )
 
                 except AttributeError:
 
-                    answer = await cls.analyze_product_image(
-                        user_id,
-                        image_bytes,
-                        caption,
+                    answer = (
+                        await cls.analyze_product_image(
+                            user_id=user_id,
+                            image_bytes=image_bytes,
+                            user_caption=caption,
+                        )
                     )
 
                 # -------------------------------------------------
-                # Telegram message limit
+                # إرسال النتيجة
                 # -------------------------------------------------
 
-                max_length = 4096
-
-                if len(answer) <= max_length:
-
-                    await botnav.bot.send_message(
-                        message.chat.id,
-                        answer,
-                    )
-
-                    return
-
-                # -------------------------------------------------
-                # Split long response
-                # -------------------------------------------------
-
-                for i in range(
-                    0,
-                    len(answer),
-                    max_length
-                ):
-
-                    chunk = answer[
-                        i:i + max_length
-                    ]
-
-                    await botnav.bot.send_message(
-                        message.chat.id,
-                        chunk,
-                    )
+                await cls._send_long_message(
+                    botnav,
+                    message.chat.id,
+                    answer,
+                )
 
                 return
 
             except Exception as exc:
 
                 logger.exception(
-                    "Product image Telegram handler failed: %s",
+                    "Product image handler failed: %s",
                     exc,
                 )
 
                 await botnav.bot.send_message(
                     message.chat.id,
-                    "حدث خطأ أثناء تحليل صورة المنتج.\n"
+                    "حدث خطأ أثناء تحليل صورة المنتج.\n\n"
                     "راجع Railway Logs لمعرفة الخطأ الحقيقي."
                 )
 
@@ -721,17 +905,23 @@ class LLMRouter:
 
         try:
 
+            # -------------------------------------------------
+            # طلب نصي عادي
+            # -------------------------------------------------
+
             try:
 
-                answer = await botnav.await_coro_sending_action(
-                    message.chat.id,
+                answer = (
+                    await botnav.await_coro_sending_action(
+                        message.chat.id,
 
-                    cls.ask(
-                        user_id,
-                        text
-                    ),
+                        cls.ask(
+                            user_id,
+                            text
+                        ),
 
-                    "typing",
+                        "typing",
+                    )
                 )
 
             except AttributeError:
@@ -742,38 +932,14 @@ class LLMRouter:
                 )
 
             # -------------------------------------------------
-            # Telegram message limit
+            # إرسال الرد
             # -------------------------------------------------
 
-            max_length = 4096
-
-            if len(answer) <= max_length:
-
-                await botnav.bot.send_message(
-                    message.chat.id,
-                    answer,
-                )
-
-                return
-
-            # -------------------------------------------------
-            # Split long responses
-            # -------------------------------------------------
-
-            for i in range(
-                0,
-                len(answer),
-                max_length
-            ):
-
-                chunk = answer[
-                    i:i + max_length
-                ]
-
-                await botnav.bot.send_message(
-                    message.chat.id,
-                    chunk,
-                )
+            await cls._send_long_message(
+                botnav,
+                message.chat.id,
+                answer,
+            )
 
         except Exception as exc:
 
@@ -784,6 +950,6 @@ class LLMRouter:
 
             await botnav.bot.send_message(
                 message.chat.id,
-                "حدث خطأ أثناء الاتصال بنموذج الذكاء الاصطناعي.\n"
+                "حدث خطأ أثناء الاتصال بنموذج الذكاء الاصطناعي.\n\n"
                 "راجع Railway Logs لمعرفة الخطأ الحقيقي."
             )
