@@ -6,6 +6,7 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from typing import Dict, List, Optional
 
 from openai import AsyncOpenAI
+import aiohttp
 
 import config
 
@@ -32,41 +33,45 @@ class LLMRouter:
     # Stores only the image needed for re-generation and the generated text/search terms.
     product_sessions: Dict[int, dict] = {}
 
+    PRODUCT_SESSION_KEY = "omex_product_session"
+
+    # Reuse HTTP connections instead of creating/closing an OpenAI client
+    # for every message. This materially reduces latency on Railway.
+    _clients = {}
+
     # =========================================================
     # CLIENT
     # =========================================================
 
     @classmethod
     def _get_client(cls, vision: bool = False):
-        """
-        إنشاء اتصال مع مزود الذكاء الاصطناعي.
+        """Return a cached async client so TCP/TLS connections are reused."""
+        key = "openrouter" if config.OPENROUTER_API_KEY else ("openai" if config.OPENAI_API_KEY and not vision else None)
+        if not key:
+            return None
 
-        تحليل الصور يستخدم OpenRouter.
-        المحادثة النصية تستخدم OpenRouter أولًا ثم OpenAI.
-        """
+        if key in cls._clients:
+            return cls._clients[key]
 
-        # -----------------------------------------------------
-        # OpenRouter
-        # -----------------------------------------------------
+        timeout = float(getattr(config, "AI_TIMEOUT_SECONDS", 45))
+        max_retries = int(getattr(config, "AI_MAX_RETRIES", 1))
 
-        if config.OPENROUTER_API_KEY:
-
-            return AsyncOpenAI(
+        if key == "openrouter":
+            client = AsyncOpenAI(
                 api_key=config.OPENROUTER_API_KEY,
                 base_url="https://openrouter.ai/api/v1",
+                timeout=timeout,
+                max_retries=max_retries,
+            )
+        else:
+            client = AsyncOpenAI(
+                api_key=config.OPENAI_API_KEY,
+                timeout=timeout,
+                max_retries=max_retries,
             )
 
-        # -----------------------------------------------------
-        # OpenAI
-        # -----------------------------------------------------
-
-        if config.OPENAI_API_KEY and not vision:
-
-            return AsyncOpenAI(
-                api_key=config.OPENAI_API_KEY
-            )
-
-        return None
+        cls._clients[key] = client
+        return client
 
     # =========================================================
     # NORMAL TEXT MODEL
@@ -81,7 +86,7 @@ class LLMRouter:
         return getattr(
             config,
             "DEFAULT_LLM_MODEL",
-            "deepseek/deepseek-r1-0528:free",
+            "openai/gpt-oss-20b:free",
         )
 
     # =========================================================
@@ -104,7 +109,7 @@ class LLMRouter:
         return getattr(
             config,
             "VISION_MODEL",
-            "openrouter/free",
+            "nvidia/nemotron-nano-12b-v2-vl:free",
         )
 
     # =========================================================
@@ -440,7 +445,9 @@ CHINESE_SEARCH: [عبارة بحث صينية قصيرة ودقيقة عن ال�
             response = await client.chat.completions.create(
                 model=cls._get_model(),
                 messages=history,
-                temperature=0.7,
+                temperature=0.4,
+                max_tokens=int(getattr(config, "TEXT_MAX_TOKENS", 900)),
+                extra_body={"reasoning": {"enabled": False}},
             )
 
             answer = response.choices[0].message.content
@@ -481,11 +488,8 @@ CHINESE_SEARCH: [عبارة بحث صينية قصيرة ودقيقة عن ال�
             raise
 
         finally:
-
-            try:
-                await client.close()
-            except Exception:
-                pass
+            # Client is intentionally kept open for connection reuse.
+            pass
 
     # =========================================================
     # DOWNLOAD TELEGRAM PHOTO
@@ -505,8 +509,10 @@ CHINESE_SEARCH: [عبارة بحث صينية قصيرة ودقيقة عن ال�
 
             return None
 
-        # آخر عنصر عادةً هو أعلى دقة
-        photo = message.photo[-1]
+        # Use the next-to-largest Telegram size when available.
+        # It is usually much smaller than the original while still sharp
+        # enough for product recognition and text on packaging.
+        photo = message.photo[-2] if len(message.photo) >= 2 else message.photo[-1]
 
         file_info = await botnav.bot.get_file(
             photo.file_id
@@ -630,7 +636,9 @@ CHINESE_SEARCH: [عبارة بحث صينية قصيرة ودقيقة عن ال�
             response = await client.chat.completions.create(
                 model=cls._get_vision_model(),
                 messages=messages,
-                temperature=0.6,
+                temperature=0.35,
+                max_tokens=int(getattr(config, "VISION_MAX_TOKENS", 1200)),
+                extra_body={"reasoning": {"enabled": False}},
             )
 
             answer = response.choices[0].message.content
@@ -658,6 +666,21 @@ CHINESE_SEARCH: [عبارة بحث صينية قصيرة ودقيقة عن ال�
                         "content": cls._get_system_prompt(),
                     }
                 ]
+
+            answer = answer.strip()
+
+            # بعض نماذج الرؤية المجانية قد تتجاهل بيانات البحث التقنية.
+            # إذا حدث ذلك، نستخرجها من الوصف في طلب نصي منفصل.
+            _, english_query, chinese_query = cls._parse_product_metadata(answer)
+            if not english_query or not chinese_query:
+                generated_en, generated_zh = await cls._generate_search_queries(answer)
+                english_query = english_query or generated_en
+                chinese_query = chinese_query or generated_zh
+                answer = (
+                    answer.rstrip()
+                    + "\n\nENGLISH_SEARCH: " + (english_query or "")
+                    + "\nCHINESE_SEARCH: " + (chinese_query or "")
+                )
 
             image_memory_text = (
                 "[تم إرسال صورة منتج للتحليل]"
@@ -709,34 +732,110 @@ CHINESE_SEARCH: [عبارة بحث صينية قصيرة ودقيقة عن ال�
             raise
 
         finally:
+            # Shared client remains alive for subsequent requests.
+            pass
 
-            try:
-                await client.close()
-            except Exception:
-                pass
+    @classmethod
+    async def _generate_search_queries(cls, description: str) -> tuple[str, str]:
+        """Generate useful English/Chinese product-search terms when the vision model omits them."""
+        if (
+            not description
+            or not config.OPENROUTER_API_KEY
+            or not getattr(config, "GENERATE_SEARCH_QUERIES_FALLBACK", False)
+        ):
+            return "", ""
+
+        client = cls._get_client(vision=False)
+        if client is None:
+            return "", ""
+
+        prompt = f"""
+أنت متخصص في استخراج كلمات البحث للمنتجات من وصف عربي.
+استخرج عبارة بحث قصيرة ودقيقة للمنتج نفسه، وليست كلمات عامة.
+يجب أن تتضمن العلامة التجارية أو الموديل إذا كانا معروفين من النص.
+لا تضف مواصفات غير موجودة.
+
+أعد سطرين فقط وبنفس الصيغة التالية:
+ENGLISH_SEARCH: [2 إلى 6 كلمات إنجليزية]
+CHINESE_SEARCH: [2 إلى 8 كلمات صينية]
+
+وصف المنتج:
+{description}
+"""
+
+        try:
+            response = await client.chat.completions.create(
+                model=cls._get_model(),
+                messages=[
+                    {"role": "system", "content": "استخرج كلمات بحث دقيقة فقط. لا تشرح."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.2,
+            )
+            text = (response.choices[0].message.content or "").strip()
+            _, english, chinese = cls._parse_product_metadata(text)
+            return english, chinese
+        except Exception as exc:
+            logger.warning("Search query generation failed: %s", exc)
+            return "", ""
+        finally:
+            pass
 
     # =========================================================
     # PRODUCT SESSION / SEARCH HELPERS
     # =========================================================
 
     @classmethod
+    def _local_search_fallback(cls, text: str, language: str) -> str:
+        """Fast, offline fallback when the vision model omits search metadata."""
+        import re
+
+        lines = [x.strip(" -*•:") for x in (text or "").splitlines() if x.strip()]
+        name = ""
+        for i, line in enumerate(lines):
+            if line.startswith("اسم المنتج") and i + 1 < len(lines):
+                name = lines[i + 1].strip()
+                break
+        if not name and lines:
+            name = lines[0]
+
+        # Remove long prose and keep a compact phrase. Preserve model numbers.
+        name = re.sub(r"[\[\]{}()\"']", " ", name)
+        name = re.sub(r"\s+", " ", name).strip()
+        if language == "en":
+            # If the model name is already Latin/number-heavy, it is useful as-is.
+            latin = re.findall(r"[A-Za-z0-9][A-Za-z0-9+._-]*", name)
+            if latin:
+                return " ".join(latin[:6])
+            return "product"
+
+        # A safe Chinese fallback is intentionally generic rather than inventing a translation.
+        return "商品"
+
+    @classmethod
     def _parse_product_metadata(cls, answer: str) -> tuple[str, str, str]:
-        """
-        Extract the two internal search lines from the model response.
-        Returns: clean_text, english_query, chinese_query.
-        """
+        """Extract internal search metadata without exposing it to the user."""
         english_query = ""
         chinese_query = ""
         clean_lines = []
 
-        for line in answer.splitlines():
+        for line in (answer or "").splitlines():
             stripped = line.strip()
+            upper = stripped.upper()
 
-            if stripped.upper().startswith("ENGLISH_SEARCH:"):
-                english_query = stripped.split(":", 1)[1].strip()
+            if upper.startswith("ENGLISH_SEARCH:"):
+                english_query = stripped.split(":", 1)[1].strip().strip("`*[]")
                 continue
 
-            if stripped.upper().startswith("CHINESE_SEARCH:"):
+            if upper.startswith("CHINESE_SEARCH:"):
+                chinese_query = stripped.split(":", 1)[1].strip().strip("`*[]")
+                continue
+
+            # Also tolerate Arabic labels if the model translates the metadata labels.
+            if stripped.startswith("كلمة البحث الإنجليزية:"):
+                english_query = stripped.split(":", 1)[1].strip()
+                continue
+            if stripped.startswith("كلمة البحث الصينية:"):
                 chinese_query = stripped.split(":", 1)[1].strip()
                 continue
 
@@ -744,58 +843,67 @@ CHINESE_SEARCH: [عبارة بحث صينية قصيرة ودقيقة عن ال�
 
         clean_text = "\n".join(clean_lines).strip()
 
-        # Safe fallbacks. These are search phrases, not claimed specifications.
-        if not english_query:
-            english_query = "product"
-        if not chinese_query:
-            chinese_query = "商品"
+        # Never send generic placeholders to search engines.
+        if english_query.lower() in {"", "product", "item", "goods"}:
+            english_query = ""
+        if chinese_query in {"", "商品", "产品"}:
+            chinese_query = ""
 
         return clean_text, english_query, chinese_query
 
     @classmethod
     def _search_urls(cls, english_query: str, chinese_query: str) -> dict[str, str]:
-        en = quote_plus(english_query)
-        zh = quote_plus(chinese_query)
+        """Build direct search URLs. Empty terms are handled safely."""
+        en = quote_plus(english_query.strip() or "product")
+        zh = quote_plus(chinese_query.strip() or "商品")
 
         return {
-            # Web search pages; no login or API key is required to open them.
             "tiktok": f"https://www.tiktok.com/search?q={en}",
             "douyin": f"https://www.douyin.com/search/{zh}",
-            "rednote": (
-                "https://www.xiaohongshu.com/search_result"
-                f"?keyword={zh}"
-            ),
+            "rednote": f"https://www.xiaohongshu.com/search_result?keyword={zh}",
         }
 
     @classmethod
+    def _get_product_session(cls, botnav, message) -> Optional[dict]:
+        """Read the product session from Telegram state first, then class memory."""
+        state_data = getattr(message, "state_data", None) or {}
+        session = state_data.get(cls.PRODUCT_SESSION_KEY)
+        if session:
+            return session
+        return cls.product_sessions.get(message.from_user.id)
+
+    @classmethod
+    def _save_product_session(cls, botnav, message, session: dict) -> None:
+        """Persist the session in TeleBotNav state so callback buttons cannot lose it."""
+        state_data = getattr(message, "state_data", None)
+        if state_data is not None:
+            state_data[cls.PRODUCT_SESSION_KEY] = session
+        cls.product_sessions[message.from_user.id] = session
+
+    @classmethod
     async def _show_product_menu(cls, botnav, message) -> None:
-        user_id = message.from_user.id
-        session = cls.product_sessions.get(user_id)
+        session = cls._get_product_session(botnav, message)
 
         if not session:
             await botnav.bot.send_message(
                 message.chat.id,
-                "لا توجد صورة منتج محفوظة. أرسل صورة المنتج أولًا."
+                "لا توجد جلسة منتج محفوظة. أرسل صورة المنتج مرة أخرى."
             )
             return
 
         urls = cls._search_urls(
-            session["english_search"],
-            session["chinese_search"],
+            session.get("english_search", ""),
+            session.get("chinese_search", ""),
         )
 
         markup = InlineKeyboardMarkup(row_width=2)
 
-        # Callback buttons are registered in TeleBotNav so they work with its
-        # existing callback handler.
-        description_cb = functools.partial(cls._send_product_description)
-        regenerate_cb = functools.partial(cls._regenerate_product)
-        facebook_cb = functools.partial(cls._prepare_facebook_post)
-
+        # Keep callback handlers in TeleBotNav, but store the product itself in
+        # per-user Telegram state instead of relying only on a module-level dict.
         callbacks = {
-            description_cb: "وصف احترافي + هاشتاقات",
-            regenerate_cb: "إعادة تحليل الصورة",
-            facebook_cb: "تجهيز منشور Facebook",
+            functools.partial(cls._send_product_description): "وصف احترافي + هاشتاقات",
+            functools.partial(cls._regenerate_product): "إعادة تحليل الصورة",
+            functools.partial(cls._prepare_facebook_post): "تجهيز منشور Facebook",
         }
 
         for callback, label in callbacks.items():
@@ -803,7 +911,6 @@ CHINESE_SEARCH: [عبارة بحث صينية قصيرة ودقيقة عن ال�
             botnav.buttons[key] = callback
             markup.add(InlineKeyboardButton(label, callback_data=key))
 
-        # Direct URL buttons: one tap opens the platform search.
         markup.add(
             InlineKeyboardButton("بحث TikTok", url=urls["tiktok"]),
             InlineKeyboardButton("بحث Douyin الصيني", url=urls["douyin"]),
@@ -812,10 +919,13 @@ CHINESE_SEARCH: [عبارة بحث صينية قصيرة ودقيقة عن ال�
             InlineKeyboardButton("بحث REDnote", url=urls["rednote"]),
         )
 
+        english = session.get("english_search") or "لم يتم استخراج كلمة بحث إنجليزية"
+        chinese = session.get("chinese_search") or "لم يتم استخراج كلمة بحث صينية"
+
         text = (
             "تم تحليل المنتج.\n\n"
-            f"كلمة البحث الإنجليزية:\n{session['english_search']}\n\n"
-            f"كلمة البحث الصينية:\n{session['chinese_search']}\n\n"
+            f"كلمة البحث الإنجليزية:\n{english}\n\n"
+            f"كلمة البحث الصينية:\n{chinese}\n\n"
             "اختر العملية المطلوبة:"
         )
 
@@ -827,12 +937,12 @@ CHINESE_SEARCH: [عبارة بحث صينية قصيرة ودقيقة عن ال�
 
     @classmethod
     async def _send_product_description(cls, botnav, message) -> None:
-        session = cls.product_sessions.get(message.from_user.id)
+        session = cls._get_product_session(botnav, message)
 
         if not session:
             await botnav.bot.send_message(
                 message.chat.id,
-                "انتهت جلسة المنتج. أرسل الصورة مرة أخرى."
+                "لا توجد جلسة منتج محفوظة. أرسل صورة المنتج مرة أخرى."
             )
             return
 
@@ -843,30 +953,82 @@ CHINESE_SEARCH: [عبارة بحث صينية قصيرة ودقيقة عن ال�
         )
 
     @classmethod
+    async def _publish_facebook_page(cls, botnav, message, session: dict) -> bool:
+        """Publish the product image to a configured Facebook Page."""
+        page_id = getattr(config, "FACEBOOK_PAGE_ID", "")
+        access_token = getattr(config, "FACEBOOK_PAGE_ACCESS_TOKEN", "")
+        graph_version = getattr(config, "FACEBOOK_GRAPH_VERSION", "v23.0")
+
+        if not page_id or not access_token:
+            return False
+
+        image_bytes = await cls._get_session_image_bytes(botnav, session)
+        if not image_bytes:
+            raise ValueError("Product image is no longer available")
+
+        url = f"https://graph.facebook.com/{graph_version}/{page_id}/photos"
+        data = aiohttp.FormData()
+        data.add_field("access_token", access_token)
+        data.add_field(
+            "source",
+            image_bytes,
+            filename="omex_product.jpg",
+            content_type="image/jpeg",
+        )
+        data.add_field("caption", session.get("facebook_caption", ""))
+
+        timeout = aiohttp.ClientTimeout(total=60)
+        async with aiohttp.ClientSession(timeout=timeout) as http:
+            async with http.post(url, data=data) as response:
+                body = await response.text()
+                if response.status >= 400:
+                    raise RuntimeError(f"Facebook API {response.status}: {body[:500]}")
+
+        return True
+
+    @classmethod
     async def _prepare_facebook_post(cls, botnav, message) -> None:
-        """
-        Phase 1: prepare a Facebook-ready post.
-        Direct Page publishing will be added after Meta credentials are configured.
-        """
-        session = cls.product_sessions.get(message.from_user.id)
+        """Publish to a configured Facebook Page, or prepare the post if credentials are absent."""
+        session = cls._get_product_session(botnav, message)
 
         if not session:
             await botnav.bot.send_message(
                 message.chat.id,
-                "انتهت جلسة المنتج. أرسل الصورة مرة أخرى."
+                "لا توجد جلسة منتج محفوظة. أرسل صورة المنتج مرة أخرى."
+            )
+            return
+
+        try:
+            published = await cls._publish_facebook_page(botnav, message, session)
+        except Exception as exc:
+            logger.exception("Facebook publishing failed: %s", exc)
+            await botnav.bot.send_message(
+                message.chat.id,
+                "تعذر النشر على Facebook.\n\n" + str(exc)[:700],
+            )
+            published = False
+
+        if published:
+            await botnav.bot.send_message(
+                message.chat.id,
+                "تم نشر صورة المنتج مع الوصف على صفحة Facebook بنجاح.",
             )
             return
 
         await botnav.bot.send_message(
             message.chat.id,
-            "منشور Facebook جاهز:\n\n" + session["description"],
+            "منشور Facebook جاهز.\n\n" + session["description"]
+            + "\n\nلم يتم النشر المباشر لأن بيانات Facebook غير مضافة في Railway.",
         )
 
         # Re-send the original product image with the generated caption so the
         # user can save/share it directly from Telegram.
         try:
             from io import BytesIO
-            photo = BytesIO(session["image_bytes"])
+            image_bytes = await cls._get_session_image_bytes(botnav, session)
+            if not image_bytes:
+                raise ValueError("Product image is no longer available")
+            photo = BytesIO(image_bytes)
             photo.name = "omex_product.jpg"
             await botnav.bot.send_photo(
                 message.chat.id,
@@ -877,13 +1039,28 @@ CHINESE_SEARCH: [عبارة بحث صينية قصيرة ودقيقة عن ال�
             logger.exception("Failed to prepare Facebook image: %s", exc)
 
     @classmethod
+    async def _get_session_image_bytes(cls, botnav, session: dict) -> Optional[bytes]:
+        """Download the original Telegram photo again using its file_id."""
+        image_bytes = session.get("image_bytes")
+        if image_bytes:
+            return image_bytes
+
+        file_id = session.get("file_id")
+        if not file_id:
+            return None
+
+        file_info = await botnav.bot.get_file(file_id)
+        content = await botnav.bot.download_file(file_info.file_path)
+        return bytes(content)
+
+    @classmethod
     async def _regenerate_product(cls, botnav, message) -> None:
-        session = cls.product_sessions.get(message.from_user.id)
+        session = cls._get_product_session(botnav, message)
 
         if not session:
             await botnav.bot.send_message(
                 message.chat.id,
-                "انتهت جلسة المنتج. أرسل الصورة مرة أخرى."
+                "لا توجد جلسة منتج محفوظة. أرسل صورة المنتج مرة أخرى."
             )
             return
 
@@ -893,11 +1070,15 @@ CHINESE_SEARCH: [عبارة بحث صينية قصيرة ودقيقة عن ال�
                 "جاري إعادة تحليل الصورة..."
             )
 
+            image_bytes = await cls._get_session_image_bytes(botnav, session)
+            if not image_bytes:
+                raise ValueError("Product image is no longer available")
+
             answer = await botnav.await_coro_sending_action(
                 message.chat.id,
                 cls.analyze_product_image(
                     user_id=message.from_user.id,
-                    image_bytes=session["image_bytes"],
+                    image_bytes=image_bytes,
                     user_caption=session.get("caption", ""),
                 ),
                 "typing",
@@ -909,6 +1090,7 @@ CHINESE_SEARCH: [عبارة بحث صينية قصيرة ودقيقة عن ال�
             session["english_search"] = english_query
             session["chinese_search"] = chinese_query
             session["facebook_caption"] = clean_text
+            cls._save_product_session(botnav, message, session)
 
             await cls._show_product_menu(botnav, message)
 
@@ -1095,14 +1277,25 @@ CHINESE_SEARCH: [عبارة بحث صينية قصيرة ودقيقة عن ال�
                     cls._parse_product_metadata(answer)
                 )
 
-                cls.product_sessions[user_id] = {
-                    "image_bytes": image_bytes,
+                # Do not make a second AI request just to create search terms.
+                # The vision prompt already asks for them. If a model omits them,
+                # use deterministic local fallbacks so the bot stays fast.
+                if not english_query:
+                    english_query = cls._local_search_fallback(clean_text, "en")
+                if not chinese_query:
+                    chinese_query = cls._local_search_fallback(clean_text, "zh")
+
+                session = {
+                    # Telegram keeps the original file available; storing file_id
+                    # is safer than keeping raw image bytes in RAM.
+                    "file_id": message.photo[-1].file_id,
                     "caption": caption,
                     "description": clean_text,
                     "facebook_caption": clean_text,
                     "english_search": english_query,
                     "chinese_search": chinese_query,
                 }
+                cls._save_product_session(botnav, message, session)
 
                 # -------------------------------------------------
                 # إظهار خيارات المنتج
