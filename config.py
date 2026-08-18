@@ -28,6 +28,12 @@ REPLICATE_API_KEY = os.getenv("REPLICATE_API_KEY")
 # OpenRouter - used for the free AI model
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
+# Vision model for product-image analysis. Override in Railway if needed.
+VISION_MODEL = os.getenv(
+    "VISION_MODEL",
+    "openrouter/free"
+)
+
 
 # ============================================================
 # Ollama

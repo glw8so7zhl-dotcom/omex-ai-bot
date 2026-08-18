@@ -1,5 +1,8 @@
 import base64
 import logging
+import functools
+from urllib.parse import quote_plus
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from typing import Dict, List, Optional
 
 from openai import AsyncOpenAI
@@ -24,6 +27,10 @@ class LLMRouter:
     """
 
     conversations: Dict[int, List[dict]] = {}
+
+    # Latest analyzed product per Telegram user.
+    # Stores only the image needed for re-generation and the generated text/search terms.
+    product_sessions: Dict[int, dict] = {}
 
     # =========================================================
     # CLIENT
@@ -212,6 +219,10 @@ premium
 
 10. لا تضع هاشتاقات داخل الوصف.
 
+في قسم "نص إعلاني جاهز للنشر" أضف في النهاية:
+هاشتاقات
+[8 إلى 15 هاشتاقًا مناسبة للمنتج، عربية وإنجليزية، بدون اختراع أسماء أو مواصفات.]
+
 ==================================================
 أسلوب الكتابة
 ==================================================
@@ -354,6 +365,12 @@ OMEX Store
 بدون مبالغة
 بدون معلومات غير مؤكدة
 جاهزة للنسخ والنشر مباشرة.
+
+في نهاية الرد أضف سطرين تقنيين فقط لاستخدام البوت:
+ENGLISH_SEARCH: [عبارة بحث إنجليزية قصيرة ودقيقة عن المنتج]
+CHINESE_SEARCH: [عبارة بحث صينية قصيرة ودقيقة عن المنتج]
+
+لا تضع أي شرح آخر بعد هذين السطرين.
 """
 
     # =========================================================
@@ -699,6 +716,210 @@ OMEX Store
                 pass
 
     # =========================================================
+    # PRODUCT SESSION / SEARCH HELPERS
+    # =========================================================
+
+    @classmethod
+    def _parse_product_metadata(cls, answer: str) -> tuple[str, str, str]:
+        """
+        Extract the two internal search lines from the model response.
+        Returns: clean_text, english_query, chinese_query.
+        """
+        english_query = ""
+        chinese_query = ""
+        clean_lines = []
+
+        for line in answer.splitlines():
+            stripped = line.strip()
+
+            if stripped.upper().startswith("ENGLISH_SEARCH:"):
+                english_query = stripped.split(":", 1)[1].strip()
+                continue
+
+            if stripped.upper().startswith("CHINESE_SEARCH:"):
+                chinese_query = stripped.split(":", 1)[1].strip()
+                continue
+
+            clean_lines.append(line)
+
+        clean_text = "\n".join(clean_lines).strip()
+
+        # Safe fallbacks. These are search phrases, not claimed specifications.
+        if not english_query:
+            english_query = "product"
+        if not chinese_query:
+            chinese_query = "商品"
+
+        return clean_text, english_query, chinese_query
+
+    @classmethod
+    def _search_urls(cls, english_query: str, chinese_query: str) -> dict[str, str]:
+        en = quote_plus(english_query)
+        zh = quote_plus(chinese_query)
+
+        return {
+            # Web search pages; no login or API key is required to open them.
+            "tiktok": f"https://www.tiktok.com/search?q={en}",
+            "douyin": f"https://www.douyin.com/search/{zh}",
+            "rednote": (
+                "https://www.xiaohongshu.com/search_result"
+                f"?keyword={zh}"
+            ),
+        }
+
+    @classmethod
+    async def _show_product_menu(cls, botnav, message) -> None:
+        user_id = message.from_user.id
+        session = cls.product_sessions.get(user_id)
+
+        if not session:
+            await botnav.bot.send_message(
+                message.chat.id,
+                "لا توجد صورة منتج محفوظة. أرسل صورة المنتج أولًا."
+            )
+            return
+
+        urls = cls._search_urls(
+            session["english_search"],
+            session["chinese_search"],
+        )
+
+        markup = InlineKeyboardMarkup(row_width=2)
+
+        # Callback buttons are registered in TeleBotNav so they work with its
+        # existing callback handler.
+        description_cb = functools.partial(cls._send_product_description)
+        regenerate_cb = functools.partial(cls._regenerate_product)
+        facebook_cb = functools.partial(cls._prepare_facebook_post)
+
+        callbacks = {
+            description_cb: "وصف احترافي + هاشتاقات",
+            regenerate_cb: "إعادة تحليل الصورة",
+            facebook_cb: "تجهيز منشور Facebook",
+        }
+
+        for callback, label in callbacks.items():
+            key = str(callback.__hash__())
+            botnav.buttons[key] = callback
+            markup.add(InlineKeyboardButton(label, callback_data=key))
+
+        # Direct URL buttons: one tap opens the platform search.
+        markup.add(
+            InlineKeyboardButton("بحث TikTok", url=urls["tiktok"]),
+            InlineKeyboardButton("بحث Douyin الصيني", url=urls["douyin"]),
+        )
+        markup.add(
+            InlineKeyboardButton("بحث REDnote", url=urls["rednote"]),
+        )
+
+        text = (
+            "تم تحليل المنتج.\n\n"
+            f"كلمة البحث الإنجليزية:\n{session['english_search']}\n\n"
+            f"كلمة البحث الصينية:\n{session['chinese_search']}\n\n"
+            "اختر العملية المطلوبة:"
+        )
+
+        await botnav.bot.send_message(
+            message.chat.id,
+            text,
+            reply_markup=markup,
+        )
+
+    @classmethod
+    async def _send_product_description(cls, botnav, message) -> None:
+        session = cls.product_sessions.get(message.from_user.id)
+
+        if not session:
+            await botnav.bot.send_message(
+                message.chat.id,
+                "انتهت جلسة المنتج. أرسل الصورة مرة أخرى."
+            )
+            return
+
+        await cls._send_long_message(
+            botnav,
+            message.chat.id,
+            session["description"],
+        )
+
+    @classmethod
+    async def _prepare_facebook_post(cls, botnav, message) -> None:
+        """
+        Phase 1: prepare a Facebook-ready post.
+        Direct Page publishing will be added after Meta credentials are configured.
+        """
+        session = cls.product_sessions.get(message.from_user.id)
+
+        if not session:
+            await botnav.bot.send_message(
+                message.chat.id,
+                "انتهت جلسة المنتج. أرسل الصورة مرة أخرى."
+            )
+            return
+
+        await botnav.bot.send_message(
+            message.chat.id,
+            "منشور Facebook جاهز:\n\n" + session["description"],
+        )
+
+        # Re-send the original product image with the generated caption so the
+        # user can save/share it directly from Telegram.
+        try:
+            from io import BytesIO
+            photo = BytesIO(session["image_bytes"])
+            photo.name = "omex_product.jpg"
+            await botnav.bot.send_photo(
+                message.chat.id,
+                photo,
+                caption=session["facebook_caption"][:1024],
+            )
+        except Exception as exc:
+            logger.exception("Failed to prepare Facebook image: %s", exc)
+
+    @classmethod
+    async def _regenerate_product(cls, botnav, message) -> None:
+        session = cls.product_sessions.get(message.from_user.id)
+
+        if not session:
+            await botnav.bot.send_message(
+                message.chat.id,
+                "انتهت جلسة المنتج. أرسل الصورة مرة أخرى."
+            )
+            return
+
+        try:
+            await botnav.bot.send_message(
+                message.chat.id,
+                "جاري إعادة تحليل الصورة..."
+            )
+
+            answer = await botnav.await_coro_sending_action(
+                message.chat.id,
+                cls.analyze_product_image(
+                    user_id=message.from_user.id,
+                    image_bytes=session["image_bytes"],
+                    user_caption=session.get("caption", ""),
+                ),
+                "typing",
+            )
+
+            clean_text, english_query, chinese_query = cls._parse_product_metadata(answer)
+
+            session["description"] = clean_text
+            session["english_search"] = english_query
+            session["chinese_search"] = chinese_query
+            session["facebook_caption"] = clean_text
+
+            await cls._show_product_menu(botnav, message)
+
+        except Exception as exc:
+            logger.exception("Product regeneration failed: %s", exc)
+            await botnav.bot.send_message(
+                message.chat.id,
+                "حدث خطأ أثناء إعادة تحليل الصورة."
+            )
+
+    # =========================================================
     # SEND LONG TELEGRAM MESSAGE
     # =========================================================
 
@@ -774,6 +995,10 @@ OMEX Store
         ):
 
             cls.conversations.pop(
+                user_id,
+                None
+            )
+            cls.product_sessions.pop(
                 user_id,
                 None
             )
@@ -863,13 +1088,29 @@ OMEX Store
                     )
 
                 # -------------------------------------------------
-                # إرسال النتيجة
+                # حفظ نتيجة تحليل المنتج
                 # -------------------------------------------------
 
-                await cls._send_long_message(
+                clean_text, english_query, chinese_query = (
+                    cls._parse_product_metadata(answer)
+                )
+
+                cls.product_sessions[user_id] = {
+                    "image_bytes": image_bytes,
+                    "caption": caption,
+                    "description": clean_text,
+                    "facebook_caption": clean_text,
+                    "english_search": english_query,
+                    "chinese_search": chinese_query,
+                }
+
+                # -------------------------------------------------
+                # إظهار خيارات المنتج
+                # -------------------------------------------------
+
+                await cls._show_product_menu(
                     botnav,
-                    message.chat.id,
-                    answer,
+                    message,
                 )
 
                 return
