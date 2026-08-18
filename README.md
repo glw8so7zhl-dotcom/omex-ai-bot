@@ -99,17 +99,3 @@ To enable the Web App Builder, configure the following in `config.json`:
 ![How it looks](/images/bot_screenshot.png)
 ![How it looks](/images/bot_screenshot3.png)
 ![How it looks](/images/bot_screenshot2.png)
-
-## OMEX Product Assistant updates
-
-Product-image sessions are now stored in TeleBotNav per-user state, so inline buttons do not depend only on a module-level Python dictionary. The original Telegram `file_id` is stored and the image is downloaded again when needed.
-
-Product search terms are generated for English and Chinese searches. If the vision model omits them, the bot makes a second text-model pass instead of falling back to generic `product` / `商品` searches.
-
-Optional Facebook Page publishing variables:
-
-- `FACEBOOK_PAGE_ID`
-- `FACEBOOK_PAGE_ACCESS_TOKEN`
-- `FACEBOOK_GRAPH_VERSION` (optional; defaults to `v23.0`)
-
-Without these variables, the Facebook button prepares the post and returns the product image to Telegram instead of publishing.
