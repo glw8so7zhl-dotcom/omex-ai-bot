@@ -645,7 +645,6 @@ CHINESE_SEARCH: [عبارة بحث صينية قصيرة ودقيقة عن ال�
                         messages=messages,
                         temperature=0.4,
                         max_tokens=1400,
-                        reasoning={"enabled": False},
                         provider={
                             "sort": "latency",
                             "allow_fallbacks": True,
