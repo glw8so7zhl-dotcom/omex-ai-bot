@@ -857,10 +857,14 @@ CHINESE_SEARCH: [2 إلى 8 كلمات صينية]
         en = quote_plus(english_query.strip() or "product")
         zh = quote_plus(chinese_query.strip() or "商品")
 
+        # Android deep links: open the installed apps directly instead of
+        # sending the user to a browser. These are app URL schemes, not web URLs.
+        # TikTok international app commonly registers snssdk1233; Douyin uses
+        # snssdk1128; Xiaohongshu documents xhsdiscover search deep links.
         return {
-            "tiktok": f"https://www.tiktok.com/search?q={en}",
-            "douyin": f"https://www.douyin.com/search/{zh}",
-            "rednote": f"https://www.xiaohongshu.com/search_result?keyword={zh}",
+            "tiktok": f"snssdk1233://search?keyword={en}",
+            "douyin": f"snssdk1128://search?keyword={zh}",
+            "rednote": f"xhsdiscover://search/result?keyword={zh}",
         }
 
     @classmethod
